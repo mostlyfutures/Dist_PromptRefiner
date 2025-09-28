@@ -1,5 +1,6 @@
 #include "openmd/errors/error_codes.h"
 #include <unordered_map>
+#include <string>
 
 namespace dist_prompt {
 namespace openmd {
@@ -7,7 +8,7 @@ namespace errors {
 
 // String representation of error codes
 std::string errorCodeToString(ErrorCode code) {
-    static const std::unordered_map<ErrorCode, std::string> errorStrings = {
+    static const std::unordered_map<ErrorCode, std::string> codeToString = {
         // General errors
         {ErrorCode::SUCCESS, "SUCCESS"},
         {ErrorCode::UNKNOWN_ERROR, "UNKNOWN_ERROR"},
@@ -46,100 +47,78 @@ std::string errorCodeToString(ErrorCode code) {
         {ErrorCode::NETWORK_ERROR, "NETWORK_ERROR"}
     };
     
-    auto it = errorStrings.find(code);
-    if (it != errorStrings.end()) {
-        return it->second;
-    }
-    
-    return "UNDEFINED_ERROR_CODE";
+    auto it = codeToString.find(code);
+    return it != codeToString.end() ? it->second : "UNKNOWN_ERROR_CODE_" + std::to_string(static_cast<int>(code));
 }
 
-// Error code descriptions
 std::string errorCodeDescription(ErrorCode code) {
-    static const std::unordered_map<ErrorCode, std::string> errorDescriptions = {
+    static const std::unordered_map<ErrorCode, std::string> codeToDescription = {
         // General errors
         {ErrorCode::SUCCESS, "Operation completed successfully"},
         {ErrorCode::UNKNOWN_ERROR, "An unknown error occurred"},
         {ErrorCode::NOT_IMPLEMENTED, "The requested functionality is not implemented"},
-        {ErrorCode::INVALID_ARGUMENT, "Invalid argument provided to function"},
-        {ErrorCode::TIMEOUT, "Operation timed out"},
+        {ErrorCode::INVALID_ARGUMENT, "An invalid argument was provided"},
+        {ErrorCode::TIMEOUT, "The operation timed out"},
         
         // Initialization errors
         {ErrorCode::INITIALIZATION_FAILED, "Failed to initialize OpenMD"},
-        {ErrorCode::LIBRARY_NOT_FOUND, "OpenMD library could not be found or loaded"},
-        {ErrorCode::INCOMPATIBLE_VERSION, "Incompatible version of OpenMD"},
-        {ErrorCode::CONFIGURATION_ERROR, "Error in OpenMD configuration"},
+        {ErrorCode::LIBRARY_NOT_FOUND, "The OpenMD library could not be found"},
+        {ErrorCode::INCOMPATIBLE_VERSION, "Incompatible OpenMD library version"},
+        {ErrorCode::CONFIGURATION_ERROR, "Invalid OpenMD configuration"},
         
         // API binding errors
-        {ErrorCode::BINDING_ERROR, "Error in OpenMD API binding"},
-        {ErrorCode::FUNCTION_NOT_FOUND, "OpenMD function not found"},
-        {ErrorCode::TYPE_MISMATCH, "Type mismatch in OpenMD API call"},
-        {ErrorCode::MARSHALLING_ERROR, "Error marshalling data for OpenMD API"},
+        {ErrorCode::BINDING_ERROR, "Failed to bind to OpenMD API"},
+        {ErrorCode::FUNCTION_NOT_FOUND, "Required OpenMD function not found"},
+        {ErrorCode::TYPE_MISMATCH, "Type mismatch in OpenMD function call"},
+        {ErrorCode::MARSHALLING_ERROR, "Failed to marshall data for OpenMD call"},
         
         // Simulation errors
         {ErrorCode::SIMULATION_FAILED, "OpenMD simulation failed"},
         {ErrorCode::CONVERGENCE_ERROR, "Simulation failed to converge"},
-        {ErrorCode::NUMERICAL_INSTABILITY, "Numerical instability in simulation"},
-        {ErrorCode::BOUNDARY_CONDITION_ERROR, "Error in boundary conditions"},
+        {ErrorCode::NUMERICAL_INSTABILITY, "Numerical instability detected in simulation"},
+        {ErrorCode::BOUNDARY_CONDITION_ERROR, "Invalid boundary conditions"},
         
         // Data transformation errors
-        {ErrorCode::TRANSFORMATION_ERROR, "Error transforming data"},
+        {ErrorCode::TRANSFORMATION_ERROR, "Failed to transform data"},
         {ErrorCode::SCHEMA_VALIDATION_ERROR, "Data failed schema validation"},
-        {ErrorCode::MAPPING_ERROR, "Error mapping between data formats"},
+        {ErrorCode::MAPPING_ERROR, "Failed to map data between formats"},
         {ErrorCode::DATA_CORRUPTION, "Data corruption detected"},
         
         // Resource errors
-        {ErrorCode::RESOURCE_ERROR, "Resource allocation error"},
+        {ErrorCode::RESOURCE_ERROR, "Resource allocation or management error"},
         {ErrorCode::OUT_OF_MEMORY, "Out of memory"},
         {ErrorCode::FILE_IO_ERROR, "File I/O error"},
         {ErrorCode::NETWORK_ERROR, "Network communication error"}
     };
     
-    auto it = errorDescriptions.find(code);
-    if (it != errorDescriptions.end()) {
-        return it->second;
-    }
-    
-    return "No description available for error code";
+    auto it = codeToDescription.find(code);
+    return it != codeToDescription.end() ? it->second : "Unknown error code: " + std::to_string(static_cast<int>(code));
 }
 
-// Check if an error is recoverable
 bool isErrorRecoverable(ErrorCode code) {
-    // Define which error codes are considered recoverable
-    static const std::unordered_map<ErrorCode, bool> recoverableErrors = {
-        // Some errors are recoverable
-        {ErrorCode::TIMEOUT, true},
-        {ErrorCode::CONVERGENCE_ERROR, true},
-        {ErrorCode::NUMERICAL_INSTABILITY, true}
-        // All other errors are non-recoverable by default
+    static const std::unordered_map<ErrorCode, bool> recoverable = {
+        {ErrorCode::SUCCESS, true}, {ErrorCode::INVALID_ARGUMENT, true}, {ErrorCode::TIMEOUT, true},
+        {ErrorCode::CONFIGURATION_ERROR, true}, {ErrorCode::MARSHALLING_ERROR, true},
+        {ErrorCode::SIMULATION_FAILED, true}, {ErrorCode::CONVERGENCE_ERROR, true},
+        {ErrorCode::NUMERICAL_INSTABILITY, true}, {ErrorCode::BOUNDARY_CONDITION_ERROR, true},
+        {ErrorCode::TRANSFORMATION_ERROR, true}, {ErrorCode::SCHEMA_VALIDATION_ERROR, true},
+        {ErrorCode::MAPPING_ERROR, true}, {ErrorCode::RESOURCE_ERROR, true},
+        {ErrorCode::OUT_OF_MEMORY, true}, {ErrorCode::FILE_IO_ERROR, true}, {ErrorCode::NETWORK_ERROR, true}
     };
     
-    auto it = recoverableErrors.find(code);
-    if (it != recoverableErrors.end()) {
-        return it->second;
-    }
-    
-    // By default, errors are not recoverable
-    return false;
+    auto it = recoverable.find(code);
+    return it != recoverable.end() ? it->second : false;
 }
 
-// Get the category for an error code
 std::string getErrorCategory(ErrorCode code) {
     int codeValue = static_cast<int>(code);
     
-    if (codeValue >= 0 && codeValue < 100) {
-        return "General";
-    } else if (codeValue >= 100 && codeValue < 200) {
-        return "Initialization";
-    } else if (codeValue >= 200 && codeValue < 300) {
-        return "API Binding";
-    } else if (codeValue >= 300 && codeValue < 400) {
-        return "Simulation";
-    } else if (codeValue >= 400 && codeValue < 500) {
-        return "Data Transformation";
-    } else if (codeValue >= 500 && codeValue < 600) {
-        return "Resource";
-    }
+    if (codeValue >= 0 && codeValue < 100) return "General";
+    if (codeValue >= 100 && codeValue < 200) return "Initialization";
+    if (codeValue >= 200 && codeValue < 300) return "API Binding";
+    if (codeValue >= 300 && codeValue < 400) return "Simulation";
+    if (codeValue >= 400 && codeValue < 500) return "Data Transformation";
+    if (codeValue >= 500 && codeValue < 600) return "Resource";
     
     return "Unknown";
 }

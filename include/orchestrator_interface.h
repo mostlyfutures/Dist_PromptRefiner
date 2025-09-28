@@ -5,107 +5,250 @@
 #include <map>
 #include <functional>
 #include <memory>
+#include <chrono>
 
 namespace dist_prompt {
+namespace integration {
 
 /**
- * @brief AgentCoordinator class - Interface for the Agentic Orchestrator
+ * @brief Agent configuration structure
+ */
+struct AgentConfig {
+    std::string agentId;
+    std::string agentType;  // "cli", "pcam", "geometric", "pattern", "openmd"
+    std::string endpoint;
+    std::map<std::string, std::string> capabilities;
+    int priority;
+    std::chrono::milliseconds heartbeatInterval;
+};
+
+/**
+ * @brief Workflow step structure
+ */
+struct WorkflowStep {
+    std::string stepId;
+    std::string agentType;
+    std::string action;
+    std::map<std::string, std::string> parameters;
+    std::vector<std::string> dependencies;
+    std::chrono::milliseconds timeout;
+};
+
+/**
+ * @brief Workflow definition
+ */
+struct Workflow {
+    std::string workflowId;
+    std::string name;
+    std::vector<WorkflowStep> steps;
+    std::map<std::string, std::string> globalParams;
+    std::string trigger;
+};
+
+/**
+ * @brief Execution context
+ */
+struct ExecutionContext {
+    std::string contextId;
+    std::string workflowId;
+    std::map<std::string, std::string> variables;
+    std::string workingDirectory;
+    std::chrono::system_clock::time_point startTime;
+};
+
+/**
+ * @brief Agent status enumeration
+ */
+enum class AgentStatus {
+    OFFLINE,
+    IDLE,
+    BUSY,
+    ERROR,
+    MAINTENANCE
+};
+
+/**
+ * @brief Execution result
+ */
+struct ExecutionResult {
+    bool success;
+    std::string resultData;
+    std::map<std::string, std::string> outputs;
+    std::string errorMessage;
+    std::chrono::milliseconds executionTime;
+};
+
+/**
+ * @brief Workflow event callback
+ */
+using WorkflowCallback = std::function<void(const std::string& workflowId,
+                                          const std::string& stepId,
+                                          const std::string& event,
+                                          const std::string& data)>;
+
+/**
+ * @brief AgentCoordinator interface for All → Orchestrator integration
  * 
- * This class coordinates the workflow between all components and manages
- * the autonomous agent interactions.
+ * This interface defines agent coordination and workflow management with
+ * FSM (7 states), gRPC communication, and token bucket resource management
+ * as specified in the integration flow.
  */
 class AgentCoordinator {
 public:
-    /**
-     * @brief Enum representing agent states in the FSM
-     */
-    enum class AgentState {
-        IDLE,
-        INITIALIZING,
-        ANALYZING,
-        PLANNING,
-        EXECUTING,
-        REFLECTING,
-        TERMINATING
-    };
-    
-    /**
-     * @brief Structure representing agent configuration
-     */
-    struct AgentConfig {
-        std::string agentName;
-        std::map<std::string, std::string> capabilities;
-        int priority;
-        std::vector<std::string> dependencies;
-    };
-
-    /**
-     * @brief Default constructor
-     */
-    AgentCoordinator() = default;
-    
-    /**
-     * @brief Virtual destructor to ensure proper cleanup in derived classes
-     */
     virtual ~AgentCoordinator() = default;
     
     /**
-     * @brief Initialize the agent coordinator with a workflow definition
+     * @brief Initialize the orchestrator
      * 
-     * @param workflowDefinition JSON string defining the agent workflow
-     * @return bool True if initialization was successful, false otherwise
+     * @param configPath Path to orchestrator configuration
+     * @return bool True if initialization was successful
      */
-    virtual bool initializeWorkflow(const std::string& workflowDefinition) = 0;
+    virtual bool initialize(const std::string& configPath) = 0;
     
     /**
-     * @brief Register a component with the coordinator
+     * @brief Register an agent with the orchestrator
      * 
-     * @param componentType Type of the component (e.g., "cli", "pcam", etc.)
-     * @param componentInstance Shared pointer to the component instance
-     * @return bool True if registration was successful, false otherwise
+     * @param config Agent configuration
+     * @return bool True if registration was successful
      */
-    virtual bool registerComponent(const std::string& componentType, 
-                                 void* componentInstance) = 0;
+    virtual bool registerAgent(const AgentConfig& config) = 0;
     
     /**
-     * @brief Start the workflow execution
+     * @brief Unregister an agent
      * 
-     * @param input Initial input data for the workflow
-     * @return bool True if workflow started successfully, false otherwise
+     * @param agentId Agent identifier
+     * @return bool True if unregistration was successful
      */
-    virtual bool startWorkflow(const std::string& input) = 0;
+    virtual bool unregisterAgent(const std::string& agentId) = 0;
     
     /**
-     * @brief Get the current state of an agent
+     * @brief Get status of all registered agents
      * 
-     * @param agentName Name of the agent
-     * @return AgentState Current state of the agent
+     * @return std::map<std::string, AgentStatus> Agent ID to status mapping
      */
-    virtual AgentState getAgentState(const std::string& agentName) const = 0;
+    virtual std::map<std::string, AgentStatus> getAgentStatuses() = 0;
     
     /**
-     * @brief Set a callback for workflow events
+     * @brief Define a new workflow
      * 
-     * @param callback Function to call when workflow events occur
+     * @param workflow Workflow definition
+     * @return bool True if workflow was defined successfully
      */
-    virtual void setWorkflowEventCallback(
-        std::function<void(const std::string&, const std::string&)> callback) = 0;
+    virtual bool defineWorkflow(const Workflow& workflow) = 0;
     
     /**
-     * @brief Get the final result of the workflow execution
+     * @brief Execute a workflow
      * 
-     * @return std::string JSON string containing the workflow results
+     * @param workflowId Workflow identifier
+     * @param context Execution context
+     * @param callback Progress callback
+     * @return std::string Execution ID for tracking
      */
-    virtual std::string getWorkflowResult() const = 0;
+    virtual std::string executeWorkflow(const std::string& workflowId,
+                                       const ExecutionContext& context,
+                                       WorkflowCallback callback = nullptr) = 0;
     
     /**
-     * @brief Manage resources using token bucket algorithm
+     * @brief Get workflow execution status
      * 
-     * @param resourceType Type of resource (e.g., "cpu", "memory")
-     * @param amount Amount of resource to request
-     * @return bool True if resources were successfully allocated, false otherwise
+     * @param executionId Execution identifier
+     * @return std::string Current status
      */
-    virtual bool requestResources(const std::string& resourceType, int amount) = 0;
+    virtual std::string getExecutionStatus(const std::string& executionId) = 0;
+    
+    /**
+     * @brief Get workflow execution results
+     * 
+     * @param executionId Execution identifier
+     * @return ExecutionResult Results and outputs
+     */
+    virtual ExecutionResult getExecutionResults(const std::string& executionId) = 0;
+    
+    /**
+     * @brief Cancel workflow execution
+     * 
+     * @param executionId Execution identifier
+     * @return bool True if cancellation was successful
+     */
+    virtual bool cancelExecution(const std::string& executionId) = 0;
+    
+    /**
+     * @brief Send message to specific agent
+     * 
+     * @param agentId Target agent identifier
+     * @param message Message content
+     * @param messageType Message type
+     * @return bool True if message was sent successfully
+     */
+    virtual bool sendMessage(const std::string& agentId,
+                           const std::string& message,
+                           const std::string& messageType) = 0;
+    
+    /**
+     * @brief Broadcast message to all agents of a type
+     * 
+     * @param agentType Target agent type
+     * @param message Message content
+     * @param messageType Message type
+     * @return int Number of agents that received the message
+     */
+    virtual int broadcastMessage(const std::string& agentType,
+                               const std::string& message,
+                               const std::string& messageType) = 0;
+    
+    /**
+     * @brief Allocate resources to an agent
+     * 
+     * @param agentId Agent identifier
+     * @param resourceType Type of resource
+     * @param amount Amount to allocate
+     * @return std::string Allocation ID
+     */
+    virtual std::string allocateResources(const std::string& agentId,
+                                        const std::string& resourceType,
+                                        int amount) = 0;
+    
+    /**
+     * @brief Release allocated resources
+     * 
+     * @param allocationId Allocation identifier
+     * @return bool True if resources were released
+     */
+    virtual bool releaseResources(const std::string& allocationId) = 0;
+    
+    /**
+     * @brief Get orchestrator statistics
+     * 
+     * @return std::map<std::string, double> Performance metrics
+     */
+    virtual std::map<std::string, double> getStatistics() = 0;
+    
+    /**
+     * @brief Start the orchestrator services
+     * 
+     * @return bool True if started successfully
+     */
+    virtual bool start() = 0;
+    
+    /**
+     * @brief Stop the orchestrator services
+     */
+    virtual void stop() = 0;
+    
+    /**
+     * @brief Check if orchestrator is running
+     * 
+     * @return bool True if orchestrator is running
+     */
+    virtual bool isRunning() const = 0;
 };
 
+/**
+ * @brief Factory function to create AgentCoordinator instance
+ * 
+ * @return std::unique_ptr<AgentCoordinator> AgentCoordinator instance
+ */
+std::unique_ptr<AgentCoordinator> createAgentCoordinator();
+
+} // namespace integration
 } // namespace dist_prompt

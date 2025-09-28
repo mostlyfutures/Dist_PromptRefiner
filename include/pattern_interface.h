@@ -4,70 +4,167 @@
 #include <vector>
 #include <map>
 #include <memory>
+#include <functional>
 
 namespace dist_prompt {
+namespace integration {
 
 /**
- * @brief PatternMatcher class - Interface between PCAM and Pattern Module
+ * @brief Software pattern structure
+ */
+struct SoftwarePattern {
+    std::string patternId;
+    std::string name;
+    std::string category;  // "creational", "structural", "behavioral"
+    std::string description;
+    std::vector<std::string> components;
+    std::map<std::string, std::string> rules;
+    double confidence;
+    std::string templatePath;
+};
+
+/**
+ * @brief Pattern matching result
+ */
+struct PatternMatchResult {
+    bool found;
+    SoftwarePattern pattern;
+    double matchScore;
+    std::vector<std::string> matchedElements;
+    std::map<std::string, std::string> bindings;
+    std::string explanation;
+};
+
+/**
+ * @brief Pattern transformation parameters
+ */
+struct TransformationParams {
+    std::string sourceCode;
+    std::string targetLanguage;
+    std::map<std::string, std::string> variables;
+    bool preserveComments;
+    std::string styleGuide;
+};
+
+/**
+ * @brief Pattern application result
+ */
+struct ApplicationResult {
+    bool success;
+    std::string transformedCode;
+    std::vector<std::string> appliedPatterns;
+    std::map<std::string, std::string> modifications;
+    std::string errorMessage;
+};
+
+/**
+ * @brief PatternMatcher interface for PCAM → Patterns Module integration
  * 
- * This class identifies and applies program structure patterns to software ideas.
+ * This interface defines rule-based pattern matching and template-based
+ * transformations as specified in the integration flow.
  */
 class PatternMatcher {
 public:
-    /**
-     * @brief Structure representing a program structure pattern
-     */
-    struct Pattern {
-        std::string name;
-        std::string category;
-        std::string description;
-        double confidence;
-        std::map<std::string, std::string> parameters;
-    };
-
-    /**
-     * @brief Default constructor
-     */
-    PatternMatcher() = default;
-    
-    /**
-     * @brief Virtual destructor to ensure proper cleanup in derived classes
-     */
     virtual ~PatternMatcher() = default;
     
     /**
-     * @brief Identify applicable patterns for a software idea
+     * @brief Initialize the pattern matcher with rule database
      * 
-     * @param ideaData The structured data representing the software idea
-     * @param minConfidence Minimum confidence threshold for pattern matching (0.0-1.0)
-     * @return bool True if pattern identification was successful, false otherwise
+     * @param rulesDatabasePath Path to pattern rules database
+     * @return bool True if initialization was successful
      */
-    virtual bool identifyPatterns(const std::string& ideaData, double minConfidence = 0.7) = 0;
+    virtual bool initialize(const std::string& rulesDatabasePath) = 0;
     
     /**
-     * @brief Apply identified patterns to transform the software idea
+     * @brief Load pattern definitions from file
      * 
-     * @param ideaData The structured data representing the software idea
-     * @return std::string Transformed idea with applied patterns
+     * @param patternsPath Path to patterns definition file
+     * @return bool True if patterns were loaded successfully
      */
-    virtual std::string applyPatterns(const std::string& ideaData) = 0;
+    virtual bool loadPatterns(const std::string& patternsPath) = 0;
     
     /**
-     * @brief Get the identified patterns
+     * @brief Identify patterns in source code
      * 
-     * @return std::vector<Pattern> The identified patterns with confidence scores
+     * @param sourceCode Code to analyze for patterns
+     * @param language Programming language
+     * @return std::vector<PatternMatchResult> Found patterns with scores
      */
-    virtual std::vector<Pattern> getIdentifiedPatterns() const = 0;
+    virtual std::vector<PatternMatchResult> identifyPatterns(
+        const std::string& sourceCode,
+        const std::string& language) = 0;
     
     /**
-     * @brief Verify pattern application correctness
+     * @brief Apply pattern transformation to code
      * 
-     * @param originalIdea Original idea data
-     * @param transformedIdea Transformed idea data
-     * @return bool True if verification passes, false otherwise
+     * @param pattern Pattern to apply
+     * @param params Transformation parameters
+     * @return ApplicationResult Result of pattern application
      */
-    virtual bool verifyPatternApplication(const std::string& originalIdea, 
-                                         const std::string& transformedIdea) = 0;
+    virtual ApplicationResult applyPattern(
+        const SoftwarePattern& pattern,
+        const TransformationParams& params) = 0;
+    
+    /**
+     * @brief Suggest patterns for given requirements
+     * 
+     * @param requirements System requirements or constraints
+     * @param context Development context
+     * @return std::vector<SoftwarePattern> Recommended patterns
+     */
+    virtual std::vector<SoftwarePattern> suggestPatterns(
+        const std::vector<std::string>& requirements,
+        const std::map<std::string, std::string>& context) = 0;
+    
+    /**
+     * @brief Verify pattern implementation correctness
+     * 
+     * @param sourceCode Code to verify
+     * @param expectedPattern Pattern that should be implemented
+     * @return bool True if pattern is correctly implemented
+     */
+    virtual bool verifyPatternImplementation(
+        const std::string& sourceCode,
+        const SoftwarePattern& expectedPattern) = 0;
+    
+    /**
+     * @brief Get available patterns by category
+     * 
+     * @param category Pattern category filter
+     * @return std::vector<SoftwarePattern> Patterns in category
+     */
+    virtual std::vector<SoftwarePattern> getPatternsByCategory(
+        const std::string& category) = 0;
+    
+    /**
+     * @brief Create custom pattern from code analysis
+     * 
+     * @param codeExamples Example implementations
+     * @param patternName Name for the new pattern
+     * @return SoftwarePattern Generated pattern definition
+     */
+    virtual SoftwarePattern createCustomPattern(
+        const std::vector<std::string>& codeExamples,
+        const std::string& patternName) = 0;
+    
+    /**
+     * @brief Export pattern as template
+     * 
+     * @param pattern Pattern to export
+     * @param templateFormat Format ("mustache", "jinja2", "handlebars")
+     * @return std::string Template representation
+     */
+    virtual std::string exportAsTemplate(
+        const SoftwarePattern& pattern,
+        const std::string& templateFormat) = 0;
 };
 
+/**
+ * @brief Factory function to create PatternMatcher instance
+ * 
+ * @return std::unique_ptr<PatternMatcher> PatternMatcher instance
+ */
+std::unique_ptr<PatternMatcher> createPatternMatcher();
+
+} // namespace integration
 } // namespace dist_prompt

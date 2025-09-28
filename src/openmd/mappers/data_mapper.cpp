@@ -1,7 +1,10 @@
 #include "openmd/mappers/data_mapper.h"
+#include "openmd/errors/error_codes.h"
+#include <nlohmann/json.hpp>
+#include <nlohmann/json-schema.hpp>
 #include <fstream>
 #include <filesystem>
-#include <nlohmann/json.hpp>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 
@@ -12,17 +15,6 @@ namespace mappers {
 // Private implementation class (PIMPL idiom)
 class DataMapper::Impl {
 public:
-    // Mapping function types
-    using ToOpenMDFn = std::function<std::string(const nlohmann::json&)>;
-    using FromOpenMDFn = std::function<nlohmann::json(const std::string&)>;
-    
-    // Structure for custom type mapping
-    struct TypeMapping {
-        std::string typeName;
-        ToOpenMDFn toOpenMDFn;
-        FromOpenMDFn fromOpenMDFn;
-    };
-
     Impl() = default;
     ~Impl() = default;
     
@@ -31,124 +23,204 @@ public:
             return false;
         }
         
-        schemas_.clear();
-        
         try {
             for (const auto& entry : fs::directory_iterator(schemaPath)) {
                 if (entry.is_regular_file() && entry.path().extension() == ".json") {
-                    std::string schemaName = entry.path().stem().string();
+                    std::string filename = entry.path().filename().string();
+                    std::string schemaName = filename.substr(0, filename.find_first_of('.'));
                     
-                    // Load schema content
                     std::ifstream file(entry.path());
                     if (file.is_open()) {
-                        nlohmann::json schema;
-                        file >> schema;
-                        schemas_[schemaName] = schema;
+                        nlohmann::json schemaJson;
+                        file >> schemaJson;
+                        
+                        // Store the schema
+                        schemas_[schemaName] = schemaJson;
                     }
+                }
+            }
+            
+            // Also look for mapping rules
+            std::string mappingRulesPath = fs::path(schemaPath) / "mapping_rules.json";
+            if (fs::exists(mappingRulesPath)) {
+                std::ifstream file(mappingRulesPath);
+                if (file.is_open()) {
+                    file >> mappingRules_;
                 }
             }
             
             return !schemas_.empty();
         } catch (const std::exception& e) {
-            return false;
+            throw errors::OpenMDException(
+                errors::ErrorCode::SCHEMA_VALIDATION_ERROR,
+                "Failed to load schemas: " + std::string(e.what()),
+                "Path: " + schemaPath
+            );
         }
     }
     
     std::string convertToOpenMD(const nlohmann::json& appData) {
-        // Check if we have a registered type mapping for this data
-        if (appData.contains("type")) {
-            std::string typeName = appData["type"].get<std::string>();
-            auto it = typeMappings_.find(typeName);
-            if (it != typeMappings_.end()) {
-                return it->second.toOpenMDFn(appData);
+        try {
+            // Validate against app schema if available
+            if (schemas_.find("app") != schemas_.end()) {
+                nlohmann::json_schema::json_validator validator(nullptr, nlohmann::json_schema::default_string_format_check);
+                validator.set_root_schema(schemas_["app"]);
+                validator.validate(appData);
             }
+            
+            // Apply mapping rules
+            nlohmann::json openMDJson;
+            if (!mappingRules_.is_null() && mappingRules_.contains("toOpenMD")) {
+                applyMappingRules(appData, openMDJson, mappingRules_["toOpenMD"]);
+            } else {
+                // Default direct mapping if no rules
+                openMDJson = appData;
+            }
+            
+            // Validate against OpenMD schema if available
+            if (schemas_.find("openmd") != schemas_.end()) {
+                nlohmann::json_schema::json_validator validator(nullptr, nlohmann::json_schema::default_string_format_check);
+                validator.set_root_schema(schemas_["openmd"]);
+                validator.validate(openMDJson);
+            }
+            
+            // Apply any custom type mappings
+            for (const auto& [typeName, mapping] : customMappings_) {
+                if (openMDJson.contains("type") && openMDJson["type"] == typeName) {
+                    return mapping.toOpenMDFn(openMDJson);
+                }
+            }
+            
+            // Default serialization
+            return openMDJson.dump();
+        } catch (const nlohmann::json_schema::validation_error& e) {
+            throw errors::OpenMDException(
+                errors::ErrorCode::SCHEMA_VALIDATION_ERROR,
+                "JSON schema validation error: " + std::string(e.what())
+            );
+        } catch (const nlohmann::json::exception& e) {
+            throw errors::OpenMDException(
+                errors::ErrorCode::MAPPING_ERROR,
+                "JSON mapping error: " + std::string(e.what())
+            );
+        } catch (const std::exception& e) {
+            throw errors::OpenMDException(
+                errors::ErrorCode::TRANSFORMATION_ERROR,
+                "Transformation to OpenMD failed: " + std::string(e.what())
+            );
         }
-        
-        // Default conversion (direct JSON serialization)
-        return appData.dump();
     }
     
     nlohmann::json convertFromOpenMD(const std::string& openMDData) {
         try {
-            // First try to parse as JSON
-            nlohmann::json parsed = nlohmann::json::parse(openMDData);
-            
-            // Check if we have a registered type mapping for this data
-            if (parsed.contains("type")) {
-                std::string typeName = parsed["type"].get<std::string>();
-                auto it = typeMappings_.find(typeName);
-                if (it != typeMappings_.end()) {
-                    return it->second.fromOpenMDFn(openMDData);
-                }
-            }
-            
-            return parsed;
-        } catch (const nlohmann::json::parse_error&) {
-            // Not valid JSON, use type-specific mapping based on content patterns
-            for (const auto& mapping : typeMappings_) {
-                try {
-                    nlohmann::json result = mapping.second.fromOpenMDFn(openMDData);
-                    if (!result.is_null()) {
-                        return result;
+            // Parse OpenMD data as JSON
+            nlohmann::json openMDJson;
+            try {
+                openMDJson = nlohmann::json::parse(openMDData);
+            } catch (...) {
+                // Handle non-JSON OpenMD data
+                // Check if any custom type handlers can parse it
+                for (const auto& [typeName, mapping] : customMappings_) {
+                    try {
+                        return mapping.fromOpenMDFn(openMDData);
+                    } catch (...) {
+                        // Try next mapping
                     }
-                } catch (...) {
-                    // Try the next mapping
+                }
+                
+                // If we get here, no custom mapping could handle it
+                throw errors::OpenMDException(
+                    errors::ErrorCode::MAPPING_ERROR,
+                    "Cannot parse OpenMD data as JSON and no custom mapping can handle it"
+                );
+            }
+            
+            // Validate against OpenMD schema if available
+            if (schemas_.find("openmd") != schemas_.end()) {
+                nlohmann::json_schema::json_validator validator(nullptr, nlohmann::json_schema::default_string_format_check);
+                validator.set_root_schema(schemas_["openmd"]);
+                validator.validate(openMDJson);
+            }
+            
+            // Apply any custom type mappings
+            for (const auto& [typeName, mapping] : customMappings_) {
+                if (openMDJson.contains("type") && openMDJson["type"] == typeName) {
+                    return mapping.fromOpenMDFn(openMDData);
                 }
             }
             
-            // If no mapping worked, wrap the raw data
-            nlohmann::json wrapper;
-            wrapper["rawData"] = openMDData;
-            return wrapper;
+            // Apply mapping rules
+            nlohmann::json appData;
+            if (!mappingRules_.is_null() && mappingRules_.contains("fromOpenMD")) {
+                applyMappingRules(openMDJson, appData, mappingRules_["fromOpenMD"]);
+            } else {
+                // Default direct mapping if no rules
+                appData = openMDJson;
+            }
+            
+            // Validate against app schema if available
+            if (schemas_.find("app") != schemas_.end()) {
+                nlohmann::json_schema::json_validator validator(nullptr, nlohmann::json_schema::default_string_format_check);
+                validator.set_root_schema(schemas_["app"]);
+                validator.validate(appData);
+            }
+            
+            return appData;
+        } catch (const nlohmann::json_schema::validation_error& e) {
+            throw errors::OpenMDException(
+                errors::ErrorCode::SCHEMA_VALIDATION_ERROR,
+                "JSON schema validation error: " + std::string(e.what())
+            );
+        } catch (const nlohmann::json::exception& e) {
+            throw errors::OpenMDException(
+                errors::ErrorCode::MAPPING_ERROR,
+                "JSON mapping error: " + std::string(e.what())
+            );
+        } catch (const errors::OpenMDException&) {
+            // Re-throw OpenMD exceptions directly
+            throw;
+        } catch (const std::exception& e) {
+            throw errors::OpenMDException(
+                errors::ErrorCode::TRANSFORMATION_ERROR,
+                "Transformation from OpenMD failed: " + std::string(e.what())
+            );
         }
     }
     
     bool addCustomMapping(
         const std::string& typeName,
-        ToOpenMDFn toOpenMDFn,
-        FromOpenMDFn fromOpenMDFn) {
+        std::function<std::string(const nlohmann::json&)> toOpenMDFn,
+        std::function<nlohmann::json(const std::string&)> fromOpenMDFn) {
         
         if (typeName.empty() || !toOpenMDFn || !fromOpenMDFn) {
             return false;
         }
         
-        TypeMapping mapping{typeName, toOpenMDFn, fromOpenMDFn};
-        typeMappings_[typeName] = mapping;
+        CustomMapping mapping;
+        mapping.toOpenMDFn = toOpenMDFn;
+        mapping.fromOpenMDFn = fromOpenMDFn;
+        
+        customMappings_[typeName] = mapping;
         return true;
     }
     
-    bool validateAgainstSchema(const nlohmann::json& data, const std::string& schemaName) {
+    bool validate(const nlohmann::json& data, const std::string& schemaName) {
         auto it = schemas_.find(schemaName);
         if (it == schemas_.end()) {
-            throw errors::OpenMDException(
-                errors::ErrorCode::SCHEMA_VALIDATION_ERROR,
-                "Schema not found: " + schemaName,
-                "Available schemas: " + getAvailableSchemasString()
-            );
+            return false;
         }
         
-        // In a real implementation, this would use a JSON Schema validator library
-        // For this example, we'll do some basic validation
-        const nlohmann::json& schema = it->second;
-        
-        if (schema.contains("required") && schema["required"].is_array()) {
-            for (const auto& required : schema["required"]) {
-                if (required.is_string() && !data.contains(required.get<std::string>())) {
-                    throw errors::OpenMDException(
-                        errors::ErrorCode::SCHEMA_VALIDATION_ERROR,
-                        "Missing required property: " + required.get<std::string>(),
-                        "Validation failed for schema: " + schemaName
-                    );
-                }
-            }
+        try {
+            nlohmann::json_schema::json_validator validator(nullptr, nlohmann::json_schema::default_string_format_check);
+            validator.set_root_schema(it->second);
+            validator.validate(data);
+            return true;
+        } catch (...) {
+            return false;
         }
-        
-        // In a real implementation, would validate types, constraints, etc.
-        
-        return true;
     }
     
-    std::vector<std::string> getAvailableSchemaNames() const {
+    std::vector<std::string> getSchemaNames() const {
         std::vector<std::string> names;
         for (const auto& [name, _] : schemas_) {
             names.push_back(name);
@@ -156,20 +228,104 @@ public:
         return names;
     }
     
-    std::string getAvailableSchemasString() const {
-        std::string result;
-        for (const auto& [name, _] : schemas_) {
-            if (!result.empty()) {
-                result += ", ";
-            }
-            result += name;
-        }
-        return result;
-    }
-
 private:
-    std::map<std::string, nlohmann::json> schemas_;
-    std::map<std::string, TypeMapping> typeMappings_;
+    struct CustomMapping {
+        std::function<std::string(const nlohmann::json&)> toOpenMDFn;
+        std::function<nlohmann::json(const std::string&)> fromOpenMDFn;
+    };
+    
+    std::unordered_map<std::string, nlohmann::json> schemas_;
+    std::unordered_map<std::string, CustomMapping> customMappings_;
+    nlohmann::json mappingRules_;
+    
+    void applyMappingRules(const nlohmann::json& input, 
+                          nlohmann::json& output,
+                          const nlohmann::json& rules) {
+        // Apply field mappings
+        if (rules.contains("fields") && rules["fields"].is_object()) {
+            for (auto it = rules["fields"].begin(); it != rules["fields"].end(); ++it) {
+                const std::string& targetField = it.key();
+                const auto& sourceRule = it.value();
+                
+                if (sourceRule.is_string()) {
+                    // Direct field mapping
+                    const std::string& sourceField = sourceRule.get<std::string>();
+                    if (input.contains(sourceField)) {
+                        output[targetField] = input[sourceField];
+                    }
+                } else if (sourceRule.is_object() && sourceRule.contains("path")) {
+                    // JSON path mapping
+                    const std::string& path = sourceRule["path"].get<std::string>();
+                    nlohmann::json value = input;
+                    
+                    // Navigate path segments
+                    std::istringstream pathStream(path);
+                    std::string segment;
+                    
+                    while (std::getline(pathStream, segment, '.')) {
+                        if (value.contains(segment)) {
+                            value = value[segment];
+                        } else {
+                            value = nullptr;
+                            break;
+                        }
+                    }
+                    
+                    if (!value.is_null()) {
+                        // Apply any transformation
+                        if (sourceRule.contains("transform") && sourceRule["transform"].is_string()) {
+                            const std::string& transform = sourceRule["transform"].get<std::string>();
+                            
+                            if (transform == "toString") {
+                                output[targetField] = value.dump();
+                            } else if (transform == "toNumber" && value.is_string()) {
+                                output[targetField] = std::stod(value.get<std::string>());
+                            } else if (transform == "toBoolean") {
+                                if (value.is_string()) {
+                                    std::string strValue = value.get<std::string>();
+                                    output[targetField] = (strValue == "true" || strValue == "1");
+                                } else {
+                                    output[targetField] = value.get<bool>();
+                                }
+                            } else {
+                                // No transform or unknown transform
+                                output[targetField] = value;
+                            }
+                        } else {
+                            // No transform
+                            output[targetField] = value;
+                        }
+                    }
+                } else if (sourceRule.is_object() && sourceRule.contains("value")) {
+                    // Constant value
+                    output[targetField] = sourceRule["value"];
+                }
+            }
+        }
+        
+        // Apply template if specified
+        if (rules.contains("template") && rules["template"].is_string()) {
+            const std::string& templateName = rules["template"].get<std::string>();
+            auto templateIt = schemas_.find("template." + templateName);
+            
+            if (templateIt != schemas_.end()) {
+                // Start with template as base
+                nlohmann::json templateJson = templateIt->second;
+                
+                // Override with mapped fields
+                for (auto it = output.begin(); it != output.end(); ++it) {
+                    templateJson[it.key()] = it.value();
+                }
+                
+                output = templateJson;
+            }
+        }
+        
+        // Apply type if specified
+        if (rules.contains("type") && rules["type"].is_string()) {
+            output["type"] = rules["type"].get<std::string>();
+        }
+    }
 };
 
 // DataMapper implementation
@@ -183,27 +339,11 @@ bool DataMapper::initialize(const std::string& schemaPath) {
 }
 
 std::string DataMapper::mapToOpenMD(const nlohmann::json& appData) {
-    try {
-        return pImpl_->convertToOpenMD(appData);
-    } catch (const std::exception& e) {
-        throw errors::OpenMDException(
-            errors::ErrorCode::MAPPING_ERROR,
-            "Error mapping to OpenMD format",
-            e.what()
-        );
-    }
+    return pImpl_->convertToOpenMD(appData);
 }
 
 nlohmann::json DataMapper::mapFromOpenMD(const std::string& openMDData) {
-    try {
-        return pImpl_->convertFromOpenMD(openMDData);
-    } catch (const std::exception& e) {
-        throw errors::OpenMDException(
-            errors::ErrorCode::MAPPING_ERROR,
-            "Error mapping from OpenMD format",
-            e.what()
-        );
-    }
+    return pImpl_->convertFromOpenMD(openMDData);
 }
 
 bool DataMapper::registerCustomMapping(
@@ -215,11 +355,11 @@ bool DataMapper::registerCustomMapping(
 }
 
 bool DataMapper::validateData(const nlohmann::json& data, const std::string& schemaName) {
-    return pImpl_->validateAgainstSchema(data, schemaName);
+    return pImpl_->validate(data, schemaName);
 }
 
 std::vector<std::string> DataMapper::getAvailableSchemas() const {
-    return pImpl_->getAvailableSchemaNames();
+    return pImpl_->getSchemaNames();
 }
 
 } // namespace mappers

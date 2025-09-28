@@ -1,53 +1,127 @@
 #pragma once
 
 #include <string>
+#include <map>
 #include <vector>
+#include <memory>
 #include <functional>
 
 namespace dist_prompt {
+namespace integration {
 
 /**
- * @brief CommandProcessor class - Interface between CLI and PCAM Core Engine
+ * @brief Command processing result structure
+ */
+struct CommandResult {
+    bool success;
+    std::string output;
+    std::string errorMessage;
+    int exitCode;
+    std::map<std::string, std::string> metadata;
+};
+
+/**
+ * @brief Command input structure
+ */
+struct CommandInput {
+    std::string command;
+    std::vector<std::string> arguments;
+    std::map<std::string, std::string> options;
+    std::string inputData;
+    std::string workingDirectory;
+};
+
+/**
+ * @brief Progress callback function type
+ */
+using ProgressCallback = std::function<void(int percentage, const std::string& message)>;
+
+/**
+ * @brief CommandProcessor interface for CLI → PCAM integration
  * 
- * This class processes commands from the CLI and passes them to the PCAM Core Engine.
- * It serves as the primary integration point between user input and the processing logic.
+ * This interface defines the contract between the CLI Interface region
+ * and the PCAM Core Engine region as specified in the integration flow.
  */
 class CommandProcessor {
 public:
-    /**
-     * @brief Default constructor
-     */
-    CommandProcessor() = default;
-    
-    /**
-     * @brief Virtual destructor to ensure proper cleanup in derived classes
-     */
     virtual ~CommandProcessor() = default;
     
     /**
-     * @brief Process a software idea from command line input
+     * @brief Initialize the command processor
      * 
-     * @param ideaText The raw text describing the software idea
-     * @param options Additional processing options
-     * @return bool True if processing was successful, false otherwise
+     * @param configPath Path to configuration file
+     * @return bool True if initialization was successful
      */
-    virtual bool processIdea(const std::string& ideaText, 
-                            const std::vector<std::string>& options = {}) = 0;
+    virtual bool initialize(const std::string& configPath) = 0;
     
     /**
-     * @brief Set a callback for progress updates
+     * @brief Process a command from the CLI
      * 
-     * @param callback Function to call with progress updates (0-100%)
+     * @param input Command input structure
+     * @return CommandResult Result of command processing
      */
-    virtual void setProgressCallback(std::function<void(int)> callback) = 0;
+    virtual CommandResult processCommand(const CommandInput& input) = 0;
     
     /**
-     * @brief Get the processing result as a string
+     * @brief Process a software idea through PCAM pipeline
      * 
-     * @param format Output format (e.g., "json", "text")
-     * @return std::string The formatted result
+     * @param idea Software idea description
+     * @param callback Progress callback function
+     * @return CommandResult Result with generated artifacts
      */
-    virtual std::string getResult(const std::string& format = "text") const = 0;
+    virtual CommandResult processIdea(const std::string& idea, 
+                                    ProgressCallback callback = nullptr) = 0;
+    
+    /**
+     * @brief Get available commands
+     * 
+     * @return std::vector<std::string> List of supported commands
+     */
+    virtual std::vector<std::string> getAvailableCommands() const = 0;
+    
+    /**
+     * @brief Get command help information
+     * 
+     * @param command Command name
+     * @return std::string Help text for the command
+     */
+    virtual std::string getCommandHelp(const std::string& command) const = 0;
+    
+    /**
+     * @brief Validate input before processing
+     * 
+     * @param input Command input to validate
+     * @return bool True if input is valid
+     */
+    virtual bool validateInput(const CommandInput& input) const = 0;
+    
+    /**
+     * @brief Set output format
+     * 
+     * @param format Output format ("json", "yaml", "text")
+     * @return bool True if format is supported
+     */
+    virtual bool setOutputFormat(const std::string& format) = 0;
+    
+    /**
+     * @brief Get processor status
+     * 
+     * @return std::map<std::string, std::string> Status information
+     */
+    virtual std::map<std::string, std::string> getStatus() const = 0;
+    
+    /**
+     * @brief Shutdown the processor gracefully
+     */
+    virtual void shutdown() = 0;
 };
 
+/**
+ * @brief Factory function to create CommandProcessor instance
+ * 
+ * @return std::unique_ptr<CommandProcessor> CommandProcessor instance
+ */
+std::unique_ptr<CommandProcessor> createCommandProcessor();
+
+} // namespace integration
 } // namespace dist_prompt
